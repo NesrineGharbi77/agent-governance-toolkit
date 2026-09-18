@@ -81,6 +81,24 @@ describe('TrustManager', () => {
       expect(result.trustScore.overall).toBeGreaterThan(0.5);
     });
 
+    it('accepts an equivalent uppercase DID fingerprint', async () => {
+      let json = AgentIdentity.generate('peer-agent').exportJSON();
+      let fingerprint = json.did.slice(json.did.lastIndexOf(':') + 1);
+
+      for (let attempt = 0; attempt < 32 && !/[a-f]/.test(fingerprint); attempt += 1) {
+        json = AgentIdentity.generate('peer-agent').exportJSON();
+        fingerprint = json.did.slice(json.did.lastIndexOf(':') + 1);
+      }
+
+      expect(fingerprint).toMatch(/[a-f]/);
+      json.did = json.did.slice(0, -fingerprint.length) + fingerprint.toUpperCase();
+      const restored = AgentIdentity.fromJSON(json);
+      const result = await tm.verifyPeer('peer-agent', restored);
+
+      expect(result.verified).toBe(true);
+      expect(result.reason).toBeUndefined();
+    });
+
     it('rejects an identity whose DID does not match the claimed peer ID', async () => {
       const peer = AgentIdentity.generate('other-agent');
       const result = await tm.verifyPeer('peer-agent', peer);
