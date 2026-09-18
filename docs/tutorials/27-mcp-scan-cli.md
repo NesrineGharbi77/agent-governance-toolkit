@@ -1,6 +1,6 @@
 ---
 title: "Tutorial 27 — MCP Scan CLI"
-last_reviewed: 2026-05-28
+last_reviewed: 2026-09-18
 owner: agt-maintainers
 ---
 
@@ -16,14 +16,17 @@ MCP primitive metadata before an agent relies on it: hidden instructions, descri
 injection, schema abuse, cross-server impersonation, and rug-pull fingerprint
 drift.
 
-`mcp-scan` is local-first governance before adoption. Live inspection follows the
-official MCP 2025-11-25 lifecycle: `initialize`,
-`notifications/initialized`, normal operation with `tools/list`,
-`resources/list`, `resources/templates/list`, and `prompts/list` when the
-server advertises those capabilities, and transport-level shutdown. Live stdio scans launch configured local commands; live
-Streamable HTTP and legacy SSE scans connect to configured endpoints. For pull
-requests, staged commits, downloaded configs, or any other untrusted input, use
-`--static-only` so the CLI does not launch commands or connect to remote endpoints.
+`mcp-scan` is local-first governance before adoption. For Streamable HTTP,
+live inspection prefers the stateless MCP `2026-07-28` flow:
+`server/discover` followed by self-contained primitive-list requests carrying
+client metadata in `_meta`. If a peer rejects or cannot validate stateless
+discovery, the scanner falls back on the same endpoint to the legacy
+`2025-11-25` `initialize` / `notifications/initialized` lifecycle. Stdio
+and legacy HTTP+SSE inspection still use the legacy lifecycle today. Live stdio
+scans launch configured local commands; live HTTP and SSE scans connect to
+configured endpoints. For pull requests, staged commits, downloaded configs, or
+any other untrusted input, use `--static-only` so the CLI does not launch
+commands or connect to remote endpoints.
 
 > **Package:** `agent-os-kernel`
 > **CLI:** `mcp-scan`
@@ -38,7 +41,7 @@ requests, staged commits, downloaded configs, or any other untrusted input, use
 |---------|-------|
 | [Install](#install) | Install the package and verify the CLI |
 | [Scan a config](#scan-a-config) | Enumerate MCP primitives and scan metadata |
-| [MCP lifecycle and transports](#mcp-2025-11-25-lifecycle-and-transports) | Protocol lifecycle and transport coverage |
+| [MCP lifecycle and transports](#mcp-dual-stack-lifecycle-and-transports) | Protocol lifecycle and transport coverage |
 | [Live vs static scans](#live-transport-scans-vs-static-scans) | When commands or network connections happen |
 | [Fingerprinting](#fingerprinting-for-rug-pull-detection) | Detect primitive metadata drift |
 | [Reports and CI](#reports-and-ci) | JSON, Markdown, OWASP MCP review evidence, and exit codes |
@@ -95,33 +98,54 @@ separate CLI-only detection engine.
 
 ---
 
-## MCP 2025-11-25 lifecycle and transports
+## MCP dual-stack lifecycle and transports
 
-`mcp-scan` models the official MCP 2025-11-25 client lifecycle:
+For **Streamable HTTP**, `mcp-scan` prefers the stateless MCP
+`2026-07-28` path and keeps `2025-11-25` as a compatibility fallback.
 
-1. Send `initialize` with `protocolVersion: "2025-11-25"`, client capabilities,
-   and client info.
-2. Validate the server `initialize` result: the negotiated protocol version must
-   be `2025-11-25`, `capabilities` must be present, at least one inspectable primitive capability (`tools`, `resources`, or `prompts`) must be advertised,
-   and `serverInfo` must be present. Server metadata is treated as scan evidence,
-   not as scanner instructions.
+The preferred Streamable HTTP flow is:
+
+1. Send `server/discover` with client metadata in `_meta`.
+2. Validate the discovery result and require
+   `protocolVersion: "2026-07-28"` before entering stateless operation.
+3. Enumerate advertised primitive definitions with `tools/list`,
+   `resources/list`, `resources/templates/list`, and `prompts/list`,
+   following `nextCursor` pagination when present.
+4. Send each stateless request with client metadata in `_meta` and
+   `MCP-Protocol-Version: 2026-07-28`. Streamable HTTP requests also carry
+   `Mcp-Method`; `server/discover` carries `Mcp-Name`.
+5. Do **not** send or retain `Mcp-Session-Id` in the stateless flow.
+
+If the peer rejects stateless discovery at the HTTP layer, returns an error, or
+returns a discovery result that does not validate, the scanner falls back to
+the legacy flow on the same Streamable HTTP endpoint:
+
+1. Send `initialize` with `protocolVersion: "2025-11-25"`, client
+   capabilities, and client info.
+2. Validate the negotiated protocol version, advertised capabilities, and
+   `serverInfo`.
 3. Send `notifications/initialized`.
-4. Enumerate advertised primitive definitions with `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list`, following `nextCursor` pagination when present.
-5. Close the process, HTTP session, or SSE connection after inspection.
+4. Enumerate the same advertised primitive definitions. If the server issues
+   `Mcp-Session-Id`, the scanner carries it only on this legacy compatibility
+   path.
 
 Transport behavior:
 
-| Transport | Live scan behavior | Security implication |
-|-----------|--------------------|----------------------|
-| stdio | Launches the configured command and exchanges newline-delimited JSON-RPC over stdin/stdout | Treat as local code execution; use only for trusted configs |
-| Streamable HTTP | Sends JSON-RPC POST requests to the MCP endpoint and accepts `application/json` or `text/event-stream` responses | Treat as network access; prefer HTTPS/authenticated endpoints |
-| legacy HTTP+SSE | Opens an SSE stream, receives the message endpoint, and POSTs JSON-RPC requests there | Compatibility path for older servers; prefer Streamable HTTP for new servers |
-| static-only | Scans inline `tools` arrays and validates launch/endpoint metadata already present in the config | Safe for PR/pre-commit review because it does not execute or connect |
+| Transport | Live scan behavior | Protocol behavior |
+|-----------|--------------------|-------------------|
+| stdio | Launches the configured command and exchanges newline-delimited JSON-RPC over stdin/stdout | Currently uses the legacy `initialize` lifecycle |
+| Streamable HTTP | Sends JSON-RPC POST requests and accepts `application/json` or `text/event-stream` responses | Prefers stateless `2026-07-28` discovery; falls back to legacy `2025-11-25` |
+| legacy HTTP+SSE | Opens an SSE stream, receives the message endpoint, and POSTs JSON-RPC requests there | Legacy compatibility path |
+| static-only | Scans inline `tools` arrays and validates launch/endpoint metadata already present in the config | No MCP connection or lifecycle messages are sent |
 
-For Streamable HTTP, the scanner sends `Mcp-Protocol-Version: 2025-11-25` and
-tracks `Mcp-Session-Id` when a server returns one. The scan is metadata-only: it
-uses listing calls only and does not call tools, read resources, or render prompts by default.
+The scan is metadata-only: live inspection uses discovery and listing calls. It
+does not call tools, read resources, or render prompts by default.
 
+> **AGT session helpers are not MCP protocol sessions.** Components such as
+> `MCPSessionAuthenticator` and `MCPSessionStore` can still maintain
+> application-level authentication or state handles for AGT. They are not
+> required transport-session semantics in the MCP `2026-07-28` stateless
+> flow.
 ---
 
 ## Scan a config
@@ -178,11 +202,15 @@ What happens:
    `shell=True`. The child receives a minimal sanitized environment plus explicit
    `env` values from the server config, not the operator's full parent
    environment.
-4. For Streamable HTTP, the CLI sends MCP JSON-RPC messages to the configured MCP
-   endpoint using POST and supports JSON or SSE responses.
-5. For legacy HTTP+SSE, the CLI opens the SSE stream and sends JSON-RPC requests
-   to the advertised message endpoint.
-6. The CLI sends MCP `initialize`, `notifications/initialized`, and advertised listing calls for tools, resources, resource templates, and prompts.
+4. For Streamable HTTP, the CLI first probes `server/discover` using MCP
+   `2026-07-28`. A valid stateless peer is inspected with self-contained
+   listing requests carrying client metadata in `_meta`; no
+   `Mcp-Session-Id` is used.
+5. If Streamable HTTP stateless discovery is rejected or invalid, the CLI falls
+   back on the same endpoint to the legacy `2025-11-25` `initialize` flow.
+6. For stdio and legacy HTTP+SSE, the CLI uses the legacy lifecycle and sends
+   the advertised listing calls for tools, resources, resource templates, and
+   prompts.
 7. Discovered primitive metadata is normalized into scanner-visible definitions and passed to `MCPSecurityScanner.scan_server()`.
 8. The transport is closed after inspection.
 
@@ -223,7 +251,7 @@ effects:
 
 - stdio: launches configured local commands.
 - Streamable HTTP / SSE: connects to configured network endpoints.
-- all transports: sends MCP lifecycle and advertised primitive listing messages.
+- live transports: sends the lifecycle supported by that transport plus advertised primitive listing messages.
 
 Use live mode only for trusted configs and trusted endpoints. For stdio, the
 scanner avoids `shell=True` and passes only a sanitized child environment, but
@@ -243,8 +271,9 @@ it is the right mode for untrusted pull-request, CI, or pre-commit configs.
 
 Supported config shapes include `mcpServers` and `servers` entries with `stdio`,
 `streamable-http`/`http`, or `sse` transports. Streamable HTTP is the preferred
-HTTP transport for MCP 2025-11-25. Legacy HTTP+SSE is supported only for
-compatibility with older servers and is reported distinctly in JSON inspection
+HTTP transport and is dual-stack: stateless MCP `2026-07-28` is attempted
+first, with `2025-11-25` retained as compatibility. Legacy HTTP+SSE is
+supported only for older servers and is reported distinctly in JSON inspection
 metadata.
 
 ---
@@ -299,7 +328,7 @@ templates, and prompts.
     "suspicious-server": {
       "ok": true,
       "transport": "streamable-http",
-      "protocol_version": "2025-11-25",
+      "protocol_version": "2026-07-28",
       "tools_discovered": 1,
       "resources_discovered": 0,
       "resource_templates_discovered": 0,
@@ -580,7 +609,7 @@ the config (excluding the categories above):
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `Timed out waiting for initialize response` | Server does not speak line-delimited JSON-RPC on stdout, or takes too long to start | Verify the server works with the official MCP Inspector; increase `--timeout` |
+| `Timed out waiting for initialize response` | A stdio server or legacy compatibility peer does not answer the legacy initialization request in time | Verify the server works with the official MCP Inspector; increase `--timeout` |
 | `Server exited before responding` | Command not found, crash on startup, or missing runtime dependency | Run the command manually to check stderr output |
 | `Server args contain unresolved variables` | Config uses `${VAR}` placeholders without matching environment values | Set the variables in your shell or use `--static-only` to skip live inspection |
 | `HTTP Error 401: Unauthorized` | Remote server requires authentication headers | Add `"headers": {"Authorization": "Bearer <token>"}` to the server config |
