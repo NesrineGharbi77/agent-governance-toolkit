@@ -159,7 +159,7 @@ export class TrustManager {
     }
 
     const didFingerprint = peerIdentity.did.slice(didPrefix.length);
-    if (!/^[0-9a-f]{16}$/i.test(didFingerprint)) {
+    if (!/^[0-9a-f]{16}$/.test(didFingerprint)) {
       return 'Peer identity DID fingerprint is invalid';
     }
 
@@ -167,7 +167,7 @@ export class TrustManager {
       .update(peerIdentity.publicKey)
       .digest('hex')
       .slice(0, 16);
-    if (didFingerprint.toLowerCase() !== expectedFingerprint) {
+    if (didFingerprint !== expectedFingerprint) {
       return 'Peer identity DID fingerprint does not match the public key';
     }
 
