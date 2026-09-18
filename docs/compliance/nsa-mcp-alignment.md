@@ -68,7 +68,7 @@ Coverage levels are assigned as:
 
 **Coverage: ✅ COVERED**
 
-AGT's MCP Security Gateway specification explicitly states that unknown agents start with no AGT authentication state, no call budget, and no tool access until explicitly granted. This aligns well with the NSA publication's emphasis on explicit trust boundaries and defensive default posture.
+AGT's MCP Security Gateway specification explicitly states that unknown agents start with "no budget, no session, and no tool access" until explicitly granted. In that specification, "session" refers to the gateway's application-level authentication state, not an MCP protocol session. This aligns well with the NSA publication's emphasis on explicit trust boundaries and defensive default posture.
 
 - **MCP Security Gateway** — fail-closed interception for all MCP tool calls and responses
 - **Trust Proxy** — identity- and trust-gated tool access
