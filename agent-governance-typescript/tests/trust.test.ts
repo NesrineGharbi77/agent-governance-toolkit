@@ -81,7 +81,7 @@ describe('TrustManager', () => {
       expect(result.trustScore.overall).toBeGreaterThan(0.5);
     });
 
-    it('accepts an equivalent uppercase DID fingerprint', async () => {
+    it('rejects an uppercase DID fingerprint as non-canonical', async () => {
       let json = AgentIdentity.generate('peer-agent').exportJSON();
       let fingerprint = json.did.slice(json.did.lastIndexOf(':') + 1);
 
@@ -95,8 +95,8 @@ describe('TrustManager', () => {
       const restored = AgentIdentity.fromJSON(json);
       const result = await tm.verifyPeer('peer-agent', restored);
 
-      expect(result.verified).toBe(true);
-      expect(result.reason).toBeUndefined();
+      expect(result.verified).toBe(false);
+      expect(result.reason).toBe('Peer identity DID fingerprint is invalid');
     });
 
     it('rejects an identity whose DID does not match the claimed peer ID', async () => {
